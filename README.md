@@ -16,4 +16,5 @@ Clone this repo,
 
 `crontab -e`
 
+If you have cloned the repo in `/home/me/park`, you can 
 `0 * * * * /home/me/park/.venv/bin/python /home/me/park/main.py`
