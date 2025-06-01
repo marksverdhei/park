@@ -1,7 +1,19 @@
 # park
+
+
 Personal Action Runner Kontainers
 
 Requirements:  
 
 `GitHub CLI`  
-`python=3.12`
+`uv`
+`docker`
+`cron`
+
+Clone this repo,  
+`uv sync`  
+`gh auth login`  
+
+`crontab -e`
+
+`0 * * * * /home/me/park/.venv/bin/python /home/me/park/main.py`
