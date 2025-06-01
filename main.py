@@ -137,8 +137,6 @@ def spin_up_runner(repo_name: str) -> None:
             "REG_TOKEN": reg_token,
         },
     )
-    print(container.decode("utf-8"))
-    exit()
 
 
 def update_runners(active_repos: list[str], active_runners: list[str]) -> None:
