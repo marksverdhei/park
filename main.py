@@ -147,7 +147,6 @@ def update_runners(
     owner: str, active_repos: list[str], active_runners: list[str]
 ) -> None:
     "Starts and registers active runners, kills inactive runners."
-    active_repos = []
     # Actions runners are prefixed with actions-<repo owner>/<repo name>
     repos_to_spin_down = set(active_runners) - set(active_repos)
     repos_to_spin_up = set(active_repos) - set(active_runners)
