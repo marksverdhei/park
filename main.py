@@ -1,6 +1,7 @@
 from datetime import timedelta
 from datetime import datetime
 import docker
+from docker.models.containers import Container
 import json
 import subprocess
 
@@ -59,8 +60,10 @@ def get_active_repos() -> dict:
 
 def get_active_runners() -> list:
     """Gets repository runners"""
+    # We only want the name of the repo, as we assume
+    # The owner to be you. This will likely change in the future.
     return [
-        container.name
+        "-".join(container.name.split("-")[2:])
         for container in docker_client.containers.list()
         if container.name.startswith("actions")
     ]
@@ -113,17 +116,16 @@ def get_reg_token(owner: str, repo: str) -> str:
         raise RuntimeError(f"Unexpected response format: {e}")
 
 
-def spin_down_runner(repo_name: str) -> None:
-    runner_name = f"actions-{repo_name.replace('/', '-')}"
+def spin_down_runner(owner: str, repo: str) -> None:
+    print(f"Shutting down container for {owner}/{repo}")
+    runner_name = f"actions-{owner}-{repo}"
     container = docker_client.containers.get(runner_name)
     container.stop()
-    container.remove()
-    print(f"Container '{repo_name}' was removed.")
+    print(f"Container '{repo}' was removed.")
 
 
-def spin_up_runner(repo_name: str) -> None:
-    print(repo_name)
-    owner, repo = repo_name.split("/")
+def spin_up_runner(owner: str, repo: str) -> Container:
+    print(f"Spinning up container for {owner}/{repo}")
     reg_token = get_reg_token(owner, repo)
     runner_name = f"actions-{owner}-{repo}"
     url = f"https://github.com/{owner}/{repo}"
@@ -137,20 +139,25 @@ def spin_up_runner(repo_name: str) -> None:
             "REG_TOKEN": reg_token,
         },
     )
+    print("Container started successfully")
+    return container
 
 
-def update_runners(active_repos: list[str], active_runners: list[str]) -> None:
+def update_runners(
+    owner: str, active_repos: list[str], active_runners: list[str]
+) -> None:
     "Starts and registers active runners, kills inactive runners."
+    active_repos = []
     # Actions runners are prefixed with actions-<repo owner>/<repo name>
-    repos_with_runners = [n.split("-")[1].join("/") for n in active_runners]
-    repos_to_spin_down = set(repos_with_runners) - set(active_repos)
-    repos_to_spin_up = set(active_repos) - set(repos_with_runners)
+    repos_to_spin_down = set(active_runners) - set(active_repos)
+    repos_to_spin_up = set(active_repos) - set(active_runners)
+    print(repos_to_spin_down)
 
     for repo in repos_to_spin_down:
-        spin_down_runner(repo)
+        spin_down_runner(owner, repo)
 
     for repo in repos_to_spin_up:
-        spin_up_runner(repo)
+        spin_up_runner(owner, repo)
 
 
 def main() -> None:
@@ -158,11 +165,12 @@ def main() -> None:
     print(username)
     print("Checking repos")
     active_repos = get_active_repos()
-    active_repos = [f"{username}/{repo}" for repo in active_repos]
+    print(active_repos)
     print("Checking runners")
     active_runners = get_active_runners()
+    print(active_runners)
     print("Updating runners")
-    update_runners(active_repos, active_runners)
+    update_runners(username, active_repos, active_runners)
 
 
 if __name__ == "__main__":
