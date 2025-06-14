@@ -4,6 +4,9 @@ import docker
 from docker.models.containers import Container
 import json
 import subprocess
+import base64
+import requests
+import os
 
 docker_client = docker.from_env()
 active_threshold = timedelta(weeks=1)
@@ -38,8 +41,34 @@ def get_gh_username() -> str:
         raise RuntimeError(f"Failed to retrieve GitHub username: {stderr}")
 
 
-def get_active_repos() -> dict:
-    """Gets repository information with activity"""
+def repo_uses_self_hosted(owner: str, repo: str) -> bool:
+    """
+    Returns True if any workflow file in the repo contains 'self-hosted'.
+    """
+    workflows_url = f"https://api.github.com/repos/{owner}/{repo}/contents/.github/workflows"
+    headers = {}
+    # Use GH_TOKEN or gh auth if available
+    try:
+        token = os.environ.get("GH_TOKEN")
+        if token:
+            headers["Authorization"] = f"token {token}"
+    except Exception:
+        pass
+    resp = requests.get(workflows_url, headers=headers)
+    if resp.status_code != 200:
+        return False
+    files = resp.json()
+    for wf in files:
+        if not wf["name"].endswith(('.yml', '.yaml')):
+            continue
+        wf_resp = requests.get(wf["download_url"], headers=headers)
+        if wf_resp.status_code == 200 and "self-hosted" in wf_resp.text:
+            return True
+    return False
+
+
+def get_active_repos() -> list:
+    """Gets repository information with activity and self-hosted runner workflows"""
     result = subprocess.run(
         ["gh", "repo", "list", "--json", "name,updatedAt", "--limit", "1000"],
         stdout=subprocess.PIPE,
@@ -55,7 +84,13 @@ def get_active_repos() -> dict:
         for repo in repos
     }
 
-    return [k for k, v in repos.items() if datetime.now() - v < active_threshold]
+    owner = os.environ.get("GH_USER") or get_gh_username()
+    filtered = []
+    for k, v in repos.items():
+        if datetime.now() - v < active_threshold:
+            if repo_uses_self_hosted(owner, k):
+                filtered.append(k)
+    return filtered
 
 
 def get_active_runners() -> list:
