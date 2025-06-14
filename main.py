@@ -4,6 +4,7 @@ import docker
 from docker.models.containers import Container
 import json
 import subprocess
+from repo_utils import repo_uses_self_hosted_runner
 
 docker_client = docker.from_env()
 active_threshold = timedelta(weeks=1)
@@ -39,9 +40,17 @@ def get_gh_username() -> str:
 
 
 def get_active_repos() -> dict:
-    """Gets repository information with activity"""
+    """Gets repository information with activity and self-hosted runner usage"""
     result = subprocess.run(
-        ["gh", "repo", "list", "--json", "name,updatedAt", "--limit", "1000"],
+        [
+            "gh",
+            "repo",
+            "list",
+            "--json",
+            "name,updatedAt",
+            "--limit",
+            "1000"
+        ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=True,
@@ -49,13 +58,15 @@ def get_active_repos() -> dict:
     )
 
     repos = json.loads(result.stdout)
-
-    repos = {
-        repo["name"]: datetime.fromisoformat(repo["updatedAt"].replace("Z", ""))
-        for repo in repos
-    }
-
-    return [k for k, v in repos.items() if datetime.now() - v < active_threshold]
+    username = get_gh_username()
+    filtered_repos = {}
+    for repo in repos:
+        repo_name = repo["name"]
+        updated = datetime.fromisoformat(repo["updatedAt"].replace("Z", ""))
+        if datetime.now() - updated < active_threshold:
+            if repo_uses_self_hosted_runner(username, repo_name):
+                filtered_repos[repo_name] = updated
+    return list(filtered_repos.keys())
 
 
 def get_active_runners() -> list:
