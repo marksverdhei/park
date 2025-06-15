@@ -3,28 +3,34 @@ from __future__ import annotations
 """A small helper that automatically maintains one ephemeral GitHub
 self‑hosted runner **per active repository**.
 
-* **Active** = the repo had **either**
-  * a commit **or**
-  * a workflow run
+* **Active** = the repo had **either**  
+  • a commit **or**  
+  • a workflow run  
   during the last 7 days.
 * The repo must also contain **at least one workflow file** in
-  `.github/workflows/` whose YAML contains the string
-  `self-hosted`.
+  `.github/workflows/` whose YAML contains the string `self-hosted`.
 
-When the criteria change this script will:
-* **Spin up** a Docker container (based on the official
-  `ghcr.io/actions/actions-runner` image) for newly‑active repos.
-* **Shut down** and remove the container for repos that are no longer
-  active.
-
-The script relies exclusively on the `gh` CLI and Docker being
-installed and authenticated.
+The script relies on the `gh` CLI and Docker being installed and
+authenticated.
 
 Run it on a cadence (e.g. every 30 min) from a small server or CI job.
+
+### Debugging
+Logging is now handled via `logging` and is **very chatty** in `DEBUG`
+mode.  Set an environment variable to control verbosity:
+
+```
+export LOG_LEVEL=DEBUG   # or INFO / WARNING / ERROR
+```
 """
+
+###############################################################################
+# Standard library & third‑party imports
+###############################################################################
 
 import base64
 import json
+import os
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -32,59 +38,82 @@ from typing import Iterable, List
 
 import docker
 from docker.models.containers import Container
+import logging
 
 ###############################################################################
-# Configuration
+# Logging configuration – driven by $LOG_LEVEL (default INFO)
 ###############################################################################
 
-active_threshold = timedelta(days=7)
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    level=LOG_LEVEL,
+)
+logger = logging.getLogger(__name__)
+logger.debug("Log level set to %s", LOG_LEVEL)
+
+###############################################################################
+# Constants & globals
+###############################################################################
+
+ACTIVE_THRESHOLD = timedelta(days=7)
 
 docker_client = docker.from_env()
+logger.debug("Docker client initialised: %s", docker_client)
 
 ###############################################################################
-# Small helpers
+# Helper functions – GitHub CLI wrapper
 ###############################################################################
-
 
 def _run_gh(*args: str, **kwargs) -> str:
-    """Run a gh command and return **stdout** (stripped)."""
+    """Run *gh* with *args* and return **stdout** (stripped).
 
-    completed = subprocess.run(
-        ["gh", *args], capture_output=True, text=True, check=True, **kwargs
-    )
-    return completed.stdout.strip()
+    Raises `subprocess.CalledProcessError` on failure, which is logged at ERROR
+    level before bubbling up.
+    """
+
+    cmd = ["gh", *args]
+    logger.debug("Running gh: %s", " ".join(cmd))
+    try:
+        completed = subprocess.run(
+            cmd, capture_output=True, text=True, check=True, **kwargs
+        )
+    except subprocess.CalledProcessError as exc:
+        logger.error(
+            "gh command failed (%s) – stderr: %s",
+            exc.returncode,
+            exc.stderr.strip() if exc.stderr else "<no stderr>",
+        )
+        raise
+
+    out = completed.stdout.strip()
+    logger.debug("gh output (truncated): %.200s", out.replace("\n", "⏎"))
+    return out
 
 
 def _iso_to_dt(value: str) -> datetime:
-    """Convert ISO‑8601 strings (optionally ending in "Z") to aware datetimes."""
+    """Translate ISO‑8601 strings (possibly ending in `Z`) into tz‑aware dt."""
 
     value = value.rstrip("Z")
     if value[-1] in ["+", "-"] and ":" in value[-3:]:
-        # Already has timezone information (e.g. "+00:00")
         return datetime.fromisoformat(value)
-    # No explicit tz – assume UTC
     return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
 
 
 def _is_recent(ts: datetime) -> bool:
-    """`True` if *ts* is within the `active_threshold`."""
-
-    return datetime.now(timezone.utc) - ts <= active_threshold
+    return datetime.now(timezone.utc) - ts <= ACTIVE_THRESHOLD
 
 ###############################################################################
-# GitHub API helpers (all via the gh CLI)
+# GitHub data gathering
 ###############################################################################
-
 
 def get_gh_username() -> str:
-    """Return the login of the authenticated GitHub user."""
-
-    return _run_gh("api", "user", "--jq", ".login")
+    user = _run_gh("api", "user", "--jq", ".login")
+    logger.info("Authenticated as %s", user)
+    return user
 
 
 def _latest_commit_date(owner: str, repo: str) -> datetime | None:
-    """Return the timestamp of the latest commit (or *None* on error)."""
-
     try:
         iso_date = _run_gh(
             "api",
@@ -104,8 +133,6 @@ def _latest_commit_date(owner: str, repo: str) -> datetime | None:
 
 
 def _latest_workflow_run_date(owner: str, repo: str) -> datetime | None:
-    """Return the timestamp of the latest workflow run (or *None* if none)."""
-
     try:
         iso_date = _run_gh(
             "api",
@@ -121,19 +148,18 @@ def _latest_workflow_run_date(owner: str, repo: str) -> datetime | None:
 
 
 def _has_self_hosted_workflow(owner: str, repo: str) -> bool:
-    """Return *True* iff any workflow file references `self-hosted`."""
-
-    # 1) List workflow files (ignore if folder missing)
     try:
         raw = _run_gh(
             "api", f"repos/{owner}/{repo}/contents/.github/workflows", "--jq", "."
         )
     except subprocess.CalledProcessError:
-        return False  # No workflows folder
+        logger.debug("%s/%s ➜ no workflows directory", owner, repo)
+        return False
 
     try:
         files = json.loads(raw)
     except json.JSONDecodeError:
+        logger.warning("%s/%s ➜ Could not parse workflow listing", owner, repo)
         return False
 
     for item in files:
@@ -143,25 +169,25 @@ def _has_self_hosted_workflow(owner: str, repo: str) -> bool:
         if not path or not Path(path).suffix.lower() in {".yml", ".yaml"}:
             continue
         try:
-            file_json = _run_gh("api", f"repos/{owner}/{repo}/contents/{path}")
-            payload = json.loads(file_json)
+            payload_raw = _run_gh("api", f"repos/{owner}/{repo}/contents/{path}")
+            payload = json.loads(payload_raw)
             content_b64 = payload.get("content", "")
             content: str = base64.b64decode(content_b64).decode()
-        except Exception:  # broad – any failure => ignore this file
+        except Exception as exc:
+            logger.debug("%s/%s ➜ failed to fetch %s: %s", owner, repo, path, exc)
             continue
         if "self-hosted" in content:
+            logger.debug("%s/%s ➜ workflow %s contains self-hosted", owner, repo, path)
             return True
+    logger.debug("%s/%s ➜ no self‑hosted reference found", owner, repo)
     return False
 
 ###############################################################################
 # Determine which repos need a runner
 ###############################################################################
 
-
 def get_active_repos(owner: str) -> List[str]:
-    """Return repo **names** owned by *owner* that meet our criteria."""
-
-    # Query all repos owned by user/org. Keep name + nameWithOwner for later.
+    logger.info("Discovering repositories for %s …", owner)
     raw = _run_gh(
         "repo",
         "list",
@@ -173,59 +199,64 @@ def get_active_repos(owner: str) -> List[str]:
     )
     repo_infos = json.loads(raw)
 
-    active_repos: list[str] = []
+    active: list[str] = []
     for info in repo_infos:
         full = info["nameWithOwner"]  # "owner/repo"
         owner_, repo = full.split("/", 1)
+        logger.debug("Evaluating %s/%s", owner_, repo)
 
-        # 1) Quick pre‑filter: must have a self‑hosted workflow reference
         if not _has_self_hosted_workflow(owner_, repo):
             continue
 
-        # 2) Activity check – latest commit OR latest workflow run within threshold
         commit_dt = _latest_commit_date(owner_, repo)
         run_dt = _latest_workflow_run_date(owner_, repo)
+        logger.debug(
+            "%s/%s commit=%s run=%s",
+            owner_,
+            repo,
+            commit_dt,
+            run_dt,
+        )
 
         if (commit_dt and _is_recent(commit_dt)) or (run_dt and _is_recent(run_dt)):
-            active_repos.append(repo)
+            active.append(repo)
+            logger.info("%s/%s marked active", owner_, repo)
 
-    return active_repos
+    logger.info("Active repos needing runners: %s", active)
+    return active
 
 ###############################################################################
 # Docker helpers (container lifecycle)
 ###############################################################################
 
-
 def get_active_runners() -> List[str]:
-    """Return repo names that currently have a running container."""
-
     containers = docker_client.containers.list()
     runners = []
     for container in containers:
-        # Expected format: actions-<owner>-<repo>
         if container.name.startswith("actions-"):
             parts = container.name.split("-", 2)
             if len(parts) == 3:
                 _, _, repo_part = parts
                 runners.append(repo_part)
+                logger.debug("Found running container %s ➜ repo %s", container.name, repo_part)
+    logger.info("Currently running runners: %s", runners)
     return runners
-
 
 ###############################################################################
 # Runner spin‑up / tear‑down
 ###############################################################################
 
-
 def _get_reg_token(owner: str, repo: str) -> str:
-    """Fetch a short‑lived registration token for a repo."""
-
+    logger.debug("Requesting registration token for %s/%s", owner, repo)
     out = _run_gh(
         "api",
         "-X",
         "POST",
         f"/repos/{owner}/{repo}/actions/runners/registration-token",
     )
-    return json.loads(out)["token"]
+    token = json.loads(out)["token"]
+    logger.debug("Received token (length=%d) for %s/%s", len(token), owner, repo)
+    return token
 
 
 def spin_down_runner(owner: str, repo: str) -> None:
@@ -233,9 +264,10 @@ def spin_down_runner(owner: str, repo: str) -> None:
     try:
         container = docker_client.containers.get(name)
     except docker.errors.NotFound:
-        return  # Already gone
-    print(f"Stopping runner container for {owner}/{repo} …")
-    container.stop()  # auto‑remove is set → container disappears after stop
+        logger.warning("Container %s not found – already stopped?", name)
+        return
+    logger.info("Stopping runner container for %s/%s", owner, repo)
+    container.stop()
 
 
 def spin_up_runner(owner: str, repo: str) -> Container:
@@ -243,8 +275,8 @@ def spin_up_runner(owner: str, repo: str) -> Container:
     name = f"actions-{owner}-{repo}"
     url = f"https://github.com/{owner}/{repo}"
 
-    print(f"Starting runner container for {owner}/{repo} …")
-    return docker_client.containers.run(
+    logger.info("Starting runner container for %s/%s", owner, repo)
+    container = docker_client.containers.run(
         image="ghcr.io/actions/actions-runner:latest",
         name=name,
         remove=True,
@@ -256,41 +288,36 @@ def spin_up_runner(owner: str, repo: str) -> Container:
             "./run.sh'"
         ),
     )
+    logger.debug("Container %s started: %s", name, container)
+    return container
 
 ###############################################################################
 # Orchestration
 ###############################################################################
 
+def update_runners(owner: str, desired_repos: Iterable[str]) -> None:
+    current = set(get_active_runners())
+    desired = set(desired_repos)
 
-def update_runners(owner: str, active_repos: Iterable[str]) -> None:
-    current_runners = set(get_active_runners())
-    desired_runners = set(active_repos)
+    to_stop = current - desired
+    to_start = desired - current
 
-    to_stop = current_runners - desired_runners
-    to_start = desired_runners - current_runners
+    logger.info("Runners to stop: %s", sorted(to_stop))
+    logger.info("Runners to start: %s", sorted(to_start))
 
     for repo in sorted(to_stop):
         spin_down_runner(owner, repo)
     for repo in sorted(to_start):
         spin_up_runner(owner, repo)
 
-
 ###############################################################################
 # Entry point
 ###############################################################################
 
-
 def main() -> None:
     owner = get_gh_username()
-    print(f"Authenticated as: {owner}")
-
-    print("Discovering active repositories …")
     active_repos = get_active_repos(owner)
-    print(f"Active repos needing runners: {active_repos}")
-
-    print("Reconciling runner set …")
     update_runners(owner, active_repos)
-    print("✅ Done.")
 
 
 if __name__ == "__main__":
