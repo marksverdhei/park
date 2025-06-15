@@ -68,26 +68,43 @@ logger.debug("Docker client initialised: %s", docker_client)
 def _run_gh(*args: str, **kwargs) -> str:
     """Run *gh* with *args* and return **stdout** (stripped).
 
-    Raises `subprocess.CalledProcessError` on failure, which is logged at ERROR
-    level before bubbling up.
+    The function logs **everything**:
+    * DEBUG – the full command before execution.
+    * ERROR – on non‑zero exit, includes command, exit code, *and* the first 300
+      characters of both stdout and stderr so you can see the JSON/body that
+      came back (which often contains the GitHub REST error message).
+
+    Raises the original `subprocess.CalledProcessError` so callers can decide
+    how to react.
     """
 
     cmd = ["gh", *args]
-    logger.debug("Running gh: %s", " ".join(cmd))
+    cmd_str = " ".join(cmd)
+    logger.debug("Running gh: %s", cmd_str)
+
     try:
         completed = subprocess.run(
             cmd, capture_output=True, text=True, check=True, **kwargs
         )
     except subprocess.CalledProcessError as exc:
+        stdout_snip = (exc.stdout or "").replace("
+", "⏎")[:300]
+        stderr_snip = (exc.stderr or "").replace("
+", "⏎")[:300]
         logger.error(
-            "gh command failed (%s) – stderr: %s",
+            "gh FAILED (%s): %s
+STDOUT: %s
+STDERR: %s",
             exc.returncode,
-            exc.stderr.strip() if exc.stderr else "<no stderr>",
+            cmd_str,
+            stdout_snip or "<empty>",
+            stderr_snip or "<empty>",
         )
         raise
 
     out = completed.stdout.strip()
-    logger.debug("gh output (truncated): %.200s", out.replace("\n", "⏎"))
+    logger.debug("gh succeeded – output (truncated): %.200s", out.replace("
+", "⏎"))
     return out
 
 
@@ -276,19 +293,24 @@ def spin_up_runner(owner: str, repo: str) -> Container:
     url = f"https://github.com/{owner}/{repo}"
 
     logger.info("Starting runner container for %s/%s", owner, repo)
-    container = docker_client.containers.run(
-        image="ghcr.io/actions/actions-runner:latest",
-        name=name,
-        remove=True,
-        detach=True,
-        environment={"REG_TOKEN": token},
-        command=(
-            "sh -c '"
-            "./config.sh --url {url} --token $REG_TOKEN --labels self-hosted && "
-            "./run.sh'"
-        ),
-    )
-    logger.debug("Container %s started: %s", name, container)
+        try:
+        container = docker_client.containers.run(
+            image="ghcr.io/actions/actions-runner:latest",
+            name=name,
+            remove=True,
+            detach=True,
+            environment={"REG_TOKEN": token},
+            command=(
+                # NOTE: f-string so the {url} placeholder is expanded ✨
+                f"sh -c './config.sh --url {url} --token $REG_TOKEN --labels self-hosted && "
+                "./run.sh'"
+            ),
+        )
+    except docker.errors.DockerException as exc:
+        logger.error("Failed to start container %s: %s", name, exc)
+        raise
+
+    logger.debug("Container %s started: %s", name, container.short_id)
     return container
 
 ###############################################################################
