@@ -38,7 +38,7 @@ def get_gh_username() -> str:
         raise RuntimeError(f"Failed to retrieve GitHub username: {stderr}")
 
 
-def get_active_repos() -> dict:
+def get_active_repos() -> list:
     """Gets repository information with activity"""
     result = subprocess.run(
         ["gh", "repo", "list", "--json", "name,updatedAt", "--limit", "1000"],
@@ -55,8 +55,43 @@ def get_active_repos() -> dict:
         for repo in repos
     }
 
-    return [k for k, v in repos.items() if datetime.now() - v < active_threshold]
+    recent_activity = [k for k, v in repos.items() if datetime.now() - v < active_threshold]
+    with_actions = filter_repos_with_actions(recent_activity)
+    return with_actions
 
+def filter_repos_with_actions(repos: list[str]) -> list[str]:
+    """
+    Filters repositories that use GitHub Actions at all.
+    This is done by checking if the repository has a `.github/workflows` directory.
+    """
+    filtered_repos = []
+    # Check if the repo has a .github/workflows directory
+    for repo in repos:
+        try:
+            result = subprocess.run(
+                ["gh", "repo", "view", repo, "--json", "isArchived,isDisabled"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+                text=True,
+            )
+            repo_info = json.loads(result.stdout)
+            if not repo_info["isArchived"] and not repo_info["isDisabled"]:
+                # Check if the workflows directory exists
+                workflows_result = subprocess.run(
+                    ["gh", "api", f"/repos/{repo}/contents/.github/workflows"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    text=True,
+                )
+                if workflows_result.returncode == 0:
+                    filtered_repos.append(repo)
+        except subprocess.CalledProcessError as e:
+            print(f"Error checking repository {repo}: {e.stderr.strip()}")
+    
+
+    return filtered_repos
 
 def get_active_runners() -> list:
     """Gets repository runners"""
