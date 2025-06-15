@@ -66,10 +66,12 @@ def filter_repos_with_actions(repos: list[str]) -> list[str]:
     """
     filtered_repos = []
     # Check if the repo has a .github/workflows directory
+    owner = get_gh_username()
     for repo in repos:
+        print(repo)
         try:
             workflows_result = subprocess.run(
-                ["gh", "api", f"/repos/{repo}/contents/.github/workflows"],
+                ["gh", "api", f"/repos/{owner}/{repo}/contents/.github/workflows"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 check=False,
