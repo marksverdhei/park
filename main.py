@@ -68,25 +68,15 @@ def filter_repos_with_actions(repos: list[str]) -> list[str]:
     # Check if the repo has a .github/workflows directory
     for repo in repos:
         try:
-            result = subprocess.run(
-                ["gh", "repo", "view", repo, "--json", "isArchived,isDisabled"],
+            workflows_result = subprocess.run(
+                ["gh", "api", f"/repos/{repo}/contents/.github/workflows"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                check=True,
+                check=False,
                 text=True,
             )
-            repo_info = json.loads(result.stdout)
-            if not repo_info["isArchived"] and not repo_info["isDisabled"]:
-                # Check if the workflows directory exists
-                workflows_result = subprocess.run(
-                    ["gh", "api", f"/repos/{repo}/contents/.github/workflows"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    check=False,
-                    text=True,
-                )
-                if workflows_result.returncode == 0:
-                    filtered_repos.append(repo)
+            if workflows_result.returncode == 0:
+                filtered_repos.append(repo)
         except subprocess.CalledProcessError as e:
             print(f"Error checking repository {repo}: {e.stderr.strip()}")
     
