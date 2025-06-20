@@ -38,26 +38,66 @@ def get_gh_username() -> str:
         raise RuntimeError(f"Failed to retrieve GitHub username: {stderr}")
 
 
-def get_active_repos() -> list:
-    """Gets repository information with activity"""
+def _last_action_time(repo_full_name: str) -> datetime | None:
+    """Return the updatedAt time of the newest workflow run, or None."""
+    try:
+        res = subprocess.run(
+            [
+                "gh",
+                "run",
+                "list",
+                "-R", repo_full_name,
+                "-L", "1",
+                "--json", "updatedAt",
+                "-q", ".[0].updatedAt",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=True,
+            text=True,
+        )
+        ts = res.stdout.strip()
+        if not ts:
+            return None
+        return datetime.fromisoformat(ts.replace("Z", ""))
+    except subprocess.CalledProcessError:
+        # no runs or other error → treat as “no action time”
+        return None
+
+
+def get_active_repos() -> list[str]:
+    """Return repos whose *latest* activity (push **or** workflow run)
+    is within `active_threshold`."""
     result = subprocess.run(
-        ["gh", "repo", "list", "--json", "name,updatedAt", "--limit", "1000"],
+        ["gh", "repo", "list", "--json", "nameWithOwner,updatedAt", "--limit", "1000"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=True,
         text=True,
     )
 
-    repos = json.loads(result.stdout)
+    repos_json = json.loads(result.stdout)
+    last_active: dict[str, datetime] = {}
 
-    repos = {
-        repo["name"]: datetime.fromisoformat(repo["updatedAt"].replace("Z", ""))
-        for repo in repos
-    }
+    for repo in repos_json:
+        repo_name = repo["nameWithOwner"]
+        updated_at = datetime.fromisoformat(repo["updatedAt"].replace("Z", ""))
+        action_time = _last_action_time(repo_name)
 
-    recent_activity = [k for k, v in repos.items() if datetime.now() - v < active_threshold]
-    with_actions = filter_repos_with_actions(recent_activity)
-    return with_actions
+        # pick whichever is *more recent*
+        if action_time is not None:
+            last_active[repo_name] = max(updated_at, action_time)
+        else:
+            last_active[repo_name] = updated_at
+
+    recent_activity = [
+        name
+        for name, ts in last_active.items()
+        if datetime.now() - ts < active_threshold
+    ]
+
+    # keep only repos that actually have Actions enabled / workflows defined
+    return filter_repos_with_actions(recent_activity)
 
 def filter_repos_with_actions(repos: list[str]) -> list[str]:
     """
