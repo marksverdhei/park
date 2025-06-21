@@ -1,4 +1,5 @@
 from datetime import timedelta
+from typing import Iterable
 from datetime import datetime
 import docker
 from docker.models.containers import Container
@@ -7,6 +8,7 @@ import subprocess
 
 docker_client = docker.from_env()
 active_threshold = timedelta(weeks=1)
+abandoned_threshold = timedelta(weeks=50)
 
 
 def get_gh_username() -> str:
@@ -38,38 +40,34 @@ def get_gh_username() -> str:
         raise RuntimeError(f"Failed to retrieve GitHub username: {stderr}")
 
 
-def _last_action_time(repo_full_name: str) -> datetime | None:
+def _last_action_valid(repo_full_name: str) -> bool:
     """Return the updatedAt time of the newest workflow run, or None."""
-    try:
-        res = subprocess.run(
-            [
-                "gh",
-                "run",
-                "list",
-                "-R", repo_full_name,
-                "-L", "1",
-                "--json", "updatedAt",
-                "-q", ".[0].updatedAt",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            check=True,
-            text=True,
-        )
-        ts = res.stdout.strip()
-        if not ts:
-            return None
-        return datetime.fromisoformat(ts.replace("Z", ""))
-    except subprocess.CalledProcessError:
-        # no runs or other error → treat as “no action time”
-        return None
+    created_filter = (datetime.now() - active_threshold).isoformat()
+    res = subprocess.run(
+        [
+            "gh",
+            "run",
+            "list",
+            "--created", ">" + created_filter,
+            "-R", repo_full_name,
+            "-L", "1",
+            "--json", "updatedAt",
+            "-q", ".[0].updatedAt",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=True,
+        text=True,
+    )
+    print(repo_full_name, res.stdout)
+    ts = res.stdout.strip()
+    return ts is not None and bool(ts)
 
-
-def get_active_repos() -> list[str]:
+def get_active_repos() -> set[str]:
     """Return repos whose *latest* activity (push **or** workflow run)
     is within `active_threshold`."""
     result = subprocess.run(
-        ["gh", "repo", "list", "--json", "nameWithOwner,updatedAt", "--limit", "1000"],
+        ["gh", "repo", "list", "--no-archived", "--json", "nameWithOwner,updatedAt", "--limit", "1000"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=True,
@@ -77,50 +75,47 @@ def get_active_repos() -> list[str]:
     )
 
     repos_json = json.loads(result.stdout)
-    last_active: dict[str, datetime] = {}
-
-    for repo in repos_json:
-        repo_name = repo["nameWithOwner"]
-        updated_at = datetime.fromisoformat(repo["updatedAt"].replace("Z", ""))
-        action_time = _last_action_time(repo_name)
-
-        # pick whichever is *more recent*
-        if action_time is not None:
-            last_active[repo_name] = max(updated_at, action_time)
-        else:
-            last_active[repo_name] = updated_at
-
-    recent_activity = [
+    updated_time = {repo["nameWithOwner"]: datetime.fromisoformat(repo["updatedAt"].replace("Z", "")) for repo in repos_json}
+    repo_names = {name for name, update in updated_time.items() if datetime.now() - update < abandoned_threshold}
+    print(repo_names)
+    action_active = {name for name in repo_names if _last_action_valid(name)}
+    print(f"{action_active=}") 
+    recent_activity = {
         name
-        for name, ts in last_active.items()
+        for name, ts in updated_time.items()
         if datetime.now() - ts < active_threshold
-    ]
+    }
+    print(f"{recent_activity=}")    
+    candidates = action_active | recent_activity
+    print(candidates)
 
     # keep only repos that actually have Actions enabled / workflows defined
-    return filter_repos_with_actions(recent_activity)
+    candidates = filter_repos_with_actions(candidates)
+    print(candidates)
+    return candidates
 
-def filter_repos_with_actions(repos: list[str]) -> list[str]:
+def filter_repos_with_actions(repos: Iterable[str]) -> set[str]:
     """
     Filters repositories that use GitHub Actions at all.
     This is done by checking if the repository has a `.github/workflows` directory.
     """
-    filtered_repos = []
+    filtered_repos = set()
     # Check if the repo has a .github/workflows directory
-    owner = get_gh_username()
-    for repo in repos:
-        print(repo)
+    for repo_with_owner in repos:
         try:
             workflows_result = subprocess.run(
-                ["gh", "api", f"/repos/{owner}/{repo}/contents/.github/workflows"],
+                ["gh", "api", f"/repos/{repo_with_owner}/contents/.github/workflows"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 check=False,
                 text=True,
             )
-            if workflows_result.returncode == 0:
-                filtered_repos.append(repo)
+            if workflows_result.stdout.strip():
+                print(f"Repository {repo_with_owner} has workflows.")
+                print(workflows_result.stdout)
+                filtered_repos.add(repo_with_owner)
         except subprocess.CalledProcessError as e:
-            print(f"Error checking repository {repo}: {e.stderr.strip()}")
+            print(f"Error checking repository {repo_with_owner}: {e.stderr.strip()}")
     
 
     return filtered_repos
