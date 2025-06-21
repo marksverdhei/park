@@ -215,9 +215,11 @@ def update_runners(
     print(repos_to_spin_down)
 
     for repo in repos_to_spin_down:
+        owner, repo = repo.split("/", 1)
         spin_down_runner(owner, repo)
 
     for repo in repos_to_spin_up:
+        owner, repo = repo.split("/", 1)
         spin_up_runner(owner, repo)
 
 
