@@ -1,3 +1,4 @@
+import os
 from datetime import timedelta
 from typing import Iterable
 from datetime import datetime
@@ -5,6 +6,8 @@ import docker
 from docker.models.containers import Container
 import json
 import subprocess
+
+BASE_IMAGE = os.getenv("ACTIONS_RUNNER_BASE_IMAGE", "ghcr.io/actions/actions-runner:latest")
 
 docker_client = docker.from_env()
 active_threshold = timedelta(weeks=1)
@@ -192,7 +195,7 @@ def spin_up_runner(owner: str, repo: str) -> Container:
     runner_name = f"actions-{owner}-{repo}"
     url = f"https://github.com/{owner}/{repo}"
     container = docker_client.containers.run(
-        image="ghcr.io/actions/actions-runner:latest",
+        image=BASE_IMAGE,
         command=f"sh -c './config.sh --url {url} --token $REG_TOKEN && ./run.sh'",
         remove=True,
         detach=True,
@@ -200,13 +203,25 @@ def spin_up_runner(owner: str, repo: str) -> Container:
         environment={
             "REG_TOKEN": reg_token,
         },
+        volumes={
+            # mount the socket so `docker` commands inside talk to the host daemon
+            '/var/run/docker.sock': {
+                'bind': '/var/run/docker.sock',
+                'mode': 'rw',
+            },
+            # (optional) mount the docker client binary, if your image doesn't already have it
+            '/usr/bin/docker': {
+                'bind': '/usr/bin/docker',
+                'mode': 'ro',
+            },
+        }
     )
     print("Container started successfully")
     return container
 
 
 def update_runners(
-    owner: str, active_repos: list[str], active_runners: list[str]
+    owner: str, active_repos: Iterable[str], active_runners: list[str]
 ) -> None:
     "Starts and registers active runners, kills inactive runners."
     # Actions runners are prefixed with actions-<repo owner>/<repo name>
@@ -224,6 +239,7 @@ def update_runners(
 
 
 def main() -> None:
+    print("Using base image:", BASE_IMAGE)
     username = get_gh_username()
     print(username)
     print("Checking repos")
