@@ -198,12 +198,23 @@ def spin_up_runner(owner: str, repo: str) -> Container:
     reg_token = get_reg_token(owner, repo)
     runner_name = f"actions-{repo.replace('/', '-')}"
     url = f"https://github.com/{repo}"
+    output = subprocess.check_output(
+        ["getent", "group", "docker"],
+        text=True
+    ).strip()
+
+    if not output:
+        raise RuntimeError("Group 'docker' not found on host")
+
+# The format is: docker:x:<GID>:<members>
+    gid = int(output.split(":")[2])
+    print("gid", gid)
     container = docker_client.containers.run(
         image=BASE_IMAGE,
         command=f"sh -c 'home/runner/config.sh --url {url} --token $REG_TOKEN && home/runner/run.sh'",
         remove=True,
         detach=True,
-        user='root',
+        group_add=[gid],
         name=runner_name,
         environment={
             "REG_TOKEN": reg_token,
