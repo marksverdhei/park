@@ -211,7 +211,7 @@ def spin_up_runner(owner: str, repo: str) -> Container:
     print("gid", gid)
     container = docker_client.containers.run(
         image=BASE_IMAGE,
-        command=f"sh -c 'home/runner/config.sh --url {url} --token $REG_TOKEN && home/runner/run.sh'",
+        command=f"sh -c '/home/runner/config.sh --url {url} --token $REG_TOKEN && /home/runner/run.sh'",
         remove=True,
         detach=True,
         group_add=[gid],
