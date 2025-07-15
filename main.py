@@ -7,6 +7,8 @@ from docker.models.containers import Container
 import json
 import subprocess
 
+from docker.types import containers
+
 BASE_IMAGE = os.getenv("ACTIONS_RUNNER_BASE_IMAGE", "ghcr.io/actions/actions-runner:latest")
 # BASE_IMAGE = os.getenv("PARK_BASE_IMAGE", "ghcr.io/actions/actions-runner:latest")
 DEPROVISION = os.getenv("PARK_DEPROVISION") == 'true'
@@ -220,6 +222,7 @@ def spin_up_runner(owner: str, repo: str) -> Container:
         },
         privileged=True,
     )
+    print("Container", container)
     print("Container started successfully")
     return container
 
