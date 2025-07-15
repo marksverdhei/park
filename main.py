@@ -193,7 +193,7 @@ def spin_down_runner(owner: str, repo: str) -> None:
 def spin_up_runner(owner: str, repo: str) -> Container:
     print(f"Spinning up container for {owner}/{repo}")
     reg_token = get_reg_token(owner, repo)
-    runner_name = f"actions-{repo}"
+    runner_name = f"actions-{repo.replace('/', '-')}"
     url = f"https://github.com/{repo}"
     container = docker_client.containers.run(
         image=BASE_IMAGE,
