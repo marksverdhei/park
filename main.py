@@ -11,7 +11,7 @@ BASE_IMAGE = os.getenv("ACTIONS_RUNNER_BASE_IMAGE", "ghcr.io/actions/actions-run
 DEPROVISION = False
 
 docker_client = docker.from_env()
-active_threshold = timedelta(weeks=1)
+active_threshold = timedelta(days=3)
 abandoned_threshold = timedelta(weeks=50)
 
 
