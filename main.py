@@ -162,7 +162,7 @@ def get_reg_token(owner: str, repo: str) -> str:
                 "api",
                 "-X",
                 "POST",
-                f"/repos/{owner}/{repo}/actions/runners/registration-token",
+                f"/repos/{repo}/actions/runners/registration-token",
             ],
             capture_output=True,
             text=True,
@@ -234,10 +234,10 @@ def update_runners(
         spin_down_runner(owner, repo)
 
     for repo in repos_to_spin_up:
-        try:
-            spin_up_runner(owner, repo)
-        except Exception as e:
-            print("Failed to spin up", repo, e)
+        # try:
+        spin_up_runner(owner, repo)
+        # except Exception as e:
+            # print("Failed to spin up", repo, e)
 
     # for repo in repos_to_spin_down:
     #     owner, repo = repo.split("/", 1)
