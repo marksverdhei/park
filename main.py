@@ -215,6 +215,7 @@ def spin_up_runner(owner: str, repo: str) -> Container:
         name=runner_name,
         environment={
             "REG_TOKEN": reg_token,
+            "GH_REPO": repo,
         },
         volumes={
             # mount the socket so `docker` commands inside talk to the host daemon
