@@ -8,6 +8,7 @@ import json
 import subprocess
 
 BASE_IMAGE = os.getenv("ACTIONS_RUNNER_BASE_IMAGE", "ghcr.io/actions/actions-runner:latest")
+DEPROVISION = False
 
 docker_client = docker.from_env()
 active_threshold = timedelta(weeks=1)
@@ -242,13 +243,20 @@ def main() -> None:
     print("Using base image:", BASE_IMAGE)
     username = get_gh_username()
     print(username)
-    print("Checking repos")
-    active_repos = get_active_repos()
-    print(active_repos)
-    print("Checking runners")
-    active_runners = get_active_runners()
-    print(active_runners)
-    print("Updating runners")
+
+    if DEPROVISION:
+        print("Deprovisioning all containers")
+        active_repos, active_runners = [], []
+    else:
+        print("Checking repos")
+        active_repos = get_active_repos()
+        print(active_repos)
+        print("Checking runners")
+        active_runners = get_active_runners()
+
+        print(active_runners)
+        print("Updating runners")
+
     update_runners(username, active_repos, active_runners)
 
 
