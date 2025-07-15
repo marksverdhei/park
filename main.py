@@ -200,7 +200,7 @@ def spin_up_runner(owner: str, repo: str) -> Container:
     url = f"https://github.com/{repo}"
     container = docker_client.containers.run(
         image=BASE_IMAGE,
-        command=f"sh -c './config.sh --url {url} --token $REG_TOKEN && ./run.sh'",
+        command=f"sh -c 'home/runner/config.sh --url {url} --token $REG_TOKEN && home/runner/run.sh'",
         remove=True,
         detach=True,
         user='root',
