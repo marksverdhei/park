@@ -272,8 +272,7 @@ def main() -> None:
         active_repos, active_runners = [], []
     else:
         print("Checking repos")
-        # active_repos = get_active_repos()
-        active_repos = ["marksverdhei/mykanban"]
+        active_repos = get_active_repos()
         print(active_repos)
 
     print("Checking runners")
