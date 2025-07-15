@@ -8,7 +8,8 @@ import json
 import subprocess
 
 BASE_IMAGE = os.getenv("ACTIONS_RUNNER_BASE_IMAGE", "ghcr.io/actions/actions-runner:latest")
-DEPROVISION = False
+# BASE_IMAGE = os.getenv("PARK_BASE_IMAGE", "ghcr.io/actions/actions-runner:latest")
+DEPROVISION = os.getenv("PARK_DEPROVISION") == 'true'
 
 docker_client = docker.from_env()
 active_threshold = timedelta(days=3)
@@ -200,6 +201,7 @@ def spin_up_runner(owner: str, repo: str) -> Container:
         command=f"sh -c './config.sh --url {url} --token $REG_TOKEN && ./run.sh'",
         remove=True,
         detach=True,
+        user='root',
         name=runner_name,
         environment={
             "REG_TOKEN": reg_token,
