@@ -251,11 +251,12 @@ def main() -> None:
         print("Checking repos")
         active_repos = get_active_repos()
         print(active_repos)
-        print("Checking runners")
-        active_runners = get_active_runners()
 
-        print(active_runners)
-        print("Updating runners")
+    print("Checking runners")
+    active_runners = get_active_runners()
+
+    print(active_runners)
+    print("Updating runners")
 
     update_runners(username, active_repos, active_runners)
 
