@@ -231,14 +231,13 @@ def update_runners(
     print(repos_to_spin_down)
     
     for repo in repos_to_spin_down:
-        try:
-            spin_down_runner(owner, repo)
-        except Exception as e:
-            print("Failed to spin up", repo, e)
-            
+        spin_down_runner(owner, repo)
 
     for repo in repos_to_spin_up:
-        spin_up_runner(owner, repo)
+        try:
+            spin_up_runner(owner, repo)
+        except Exception as e:
+            print("Failed to spin up", repo, e)
 
     # for repo in repos_to_spin_down:
     #     owner, repo = repo.split("/", 1)
