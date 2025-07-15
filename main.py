@@ -215,7 +215,8 @@ def spin_up_runner(owner: str, repo: str) -> Container:
                 'bind': '/usr/bin/docker',
                 'mode': 'ro',
             },
-        }
+        },
+        privileged=True,
     )
     print("Container started successfully")
     return container
